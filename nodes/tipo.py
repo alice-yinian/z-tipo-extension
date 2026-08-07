@@ -339,6 +339,53 @@ def load_model(tipo_model, device):
     _current_model = (tipo_model, device)
 
 
+def _unload_model_from_vram():
+    """Release the current model from VRAM.
+
+    Handles both torch.nn.Module (move to CPU) and GGUF (llama-cpp-python)
+    models. Safe to call even when no model is loaded.
+    """
+    global _current_model
+    if _current_model is None:
+        return
+
+    try:
+        model = models.text_model
+        if model is not None:
+            try:
+                import torch
+
+                if isinstance(model, torch.nn.Module):
+                    model.cpu()
+            except (ImportError, AttributeError):
+                pass
+
+            if hasattr(model, "free"):
+                try:
+                    model.free()
+                except Exception:
+                    pass
+            elif hasattr(model, "close"):
+                try:
+                    model.close()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
+    models.text_model = None
+    _current_model = None
+    logger.info("Model unloaded from VRAM")
+
+
 def collect_addon(tag_map, org_tag_map):
     addon = {"tags": [], "nl": ""}
     for cate in tag_map:
@@ -386,6 +433,11 @@ def common_inputs(fifth):
         # out of its stored slot in existing workflows.
         io.Int.Input("seed", default=1234),
         io.Combo.Input("device", options=devices, default=devices[0]),
+        io.Bool.Input(
+            "auto_unload",
+            default=False,
+            tooltip="Unload the model from VRAM after execution to free GPU memory.",
+        ),
     ]
 
 
@@ -435,6 +487,7 @@ class TIPO(io.ComfyNode):
         seed: int,
         device: str,
         format: str,
+        auto_unload: bool,
     ) -> io.NodeOutput:
         ensure_runtime()
         load_model(tipo_model, device)
@@ -492,6 +545,9 @@ class TIPO(io.ComfyNode):
             min_p=min_p,
             top_k=top_k,
         )
+
+        if auto_unload:
+            _unload_model_from_vram()
 
         tag_map = restore_embeddings(tag_map, embeddings)
         addon = apply_strength(
@@ -553,6 +609,7 @@ class TIPOOperation(io.ComfyNode):
         nl_length: str,
         seed: int,
         device: str,
+        auto_unload: bool,
         operation: str,
     ) -> io.NodeOutput:
         ensure_runtime()
@@ -593,6 +650,9 @@ class TIPOOperation(io.ComfyNode):
             min_p=min_p,
             top_k=top_k,
         )
+
+        if auto_unload:
+            _unload_model_from_vram()
 
         tag_map = restore_embeddings(tag_map, embeddings)
         addon = apply_strength(

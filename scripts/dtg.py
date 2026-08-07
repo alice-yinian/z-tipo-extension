@@ -204,6 +204,10 @@ class DTGScript(scripts.Script):
                     )
                     gguf_use_cpu = gr.Checkbox(label="Use CPU (GGUF)")
                     no_formatting = gr.Checkbox(label="No formatting", value=False)
+                    auto_unload = gr.Checkbox(
+                        label="Auto unload model after execution",
+                        value=False,
+                    )
                     temperature_slider = gr.Slider(
                         label="Temperature",
                         info="← less random | more random →",
@@ -256,6 +260,7 @@ class DTGScript(scripts.Script):
             ),
             (gguf_use_cpu, lambda d: self.get_infotext(d, "gguf_cpu", None)),
             (no_formatting, lambda d: self.get_infotext(d, "no_formatting", None)),
+            (auto_unload, lambda d: self.get_infotext(d, "auto_unload", None)),
         ]
 
         return [
@@ -271,6 +276,7 @@ class DTGScript(scripts.Script):
             model_dropdown,
             gguf_use_cpu,
             no_formatting,
+            auto_unload,
         ]
 
     def get_infotext(self, d, target, default):
@@ -296,6 +302,7 @@ class DTGScript(scripts.Script):
                 "model": args[6],
                 "gguf_cpu": args[7],
                 "no_formatting": args[8],
+                "auto_unload": args[9],
             },
             ensure_ascii=False,
         ).translate(QUOTESWAP)
@@ -391,6 +398,7 @@ class DTGScript(scripts.Script):
         model: str,
         gguf_use_cpu: bool,
         no_formatting: bool,
+        auto_unload: bool,
     ):
         if model != self.current_model:
             if " | " in model:
@@ -456,9 +464,18 @@ class DTGScript(scripts.Script):
             seed=seed % SEED_MAX,
         ):
             _, extra_tokens, iter_count = current
-        if isinstance(models.text_model, torch.nn.Module):
-            models.text_model.cpu()
-            devices.torch_gc()
+        if auto_unload:
+            if isinstance(models.text_model, torch.nn.Module):
+                models.text_model.cpu()
+                devices.torch_gc()
+            try:
+                if hasattr(models.text_model, "free"):
+                    models.text_model.free()
+            except Exception:
+                pass
+            models.text_model = None
+            self.current_model = None
+            logger.info("Model unloaded from VRAM")
         tag_map["general"] += extra_tokens
         logger.info(
             f"Total general tags: {len(tag_map['general']+tag_map['special'])} | "

@@ -453,6 +453,10 @@ class TIPOScript(scripts.Script):
                             no_formatting = gr.Checkbox(
                                 label="No formatting", value=False
                             )
+                            auto_unload = gr.Checkbox(
+                                label="Auto unload model after execution",
+                                value=False,
+                            )
                             temperature_slider = gr.Slider(
                                 label="Temperature",
                                 info="← less random | more random →",
@@ -498,6 +502,7 @@ class TIPOScript(scripts.Script):
                 model_dropdown,
                 gguf_use_cpu,
                 no_formatting,
+                auto_unload,
                 self.tag_prompt_area[is_img2img],
             ],
             outputs=[
@@ -542,6 +547,7 @@ class TIPOScript(scripts.Script):
             ),
             (gguf_use_cpu, lambda d: self.get_infotext(d, "gguf_cpu", None)),
             (no_formatting, lambda d: self.get_infotext(d, "no_formatting", None)),
+            (auto_unload, lambda d: self.get_infotext(d, "auto_unload", None)),
             (
                 use_generation_seed,
                 lambda d: self.get_infotext(d, "follow_generation_seed", None),
@@ -566,6 +572,7 @@ class TIPOScript(scripts.Script):
             model_dropdown,
             gguf_use_cpu,
             no_formatting,
+            auto_unload,
             self.tag_prompt_area[is_img2img],
             self.prompt_area[is_img2img * 2 + 1],
         ]
@@ -656,11 +663,12 @@ class TIPOScript(scripts.Script):
                 "model": args[8],
                 "gguf_cpu": args[9],
                 "no_formatting": args[10],
+                "auto_unload": args[11],
             },
             ensure_ascii=False,
         ).translate(QUOTESWAP)
-        p.extra_generation_params[INFOTEXT_KEY_PROMPT] = prompt.strip() or args[-1]
-        p.extra_generation_params[INFOTEXT_NL_PROMPT] = args[-2]
+        p.extra_generation_params[INFOTEXT_KEY_PROMPT] = prompt.strip() or args[-2]
+        p.extra_generation_params[INFOTEXT_NL_PROMPT] = args[-1]
         if args[3] != DEFAULT_FORMAT:
             p.extra_generation_params[INFOTEXT_KEY_FORMAT] = args[3]
 
@@ -696,13 +704,15 @@ class TIPOScript(scripts.Script):
 
         args = list(args)
         nl_prompt = args.pop()
+        tag_prompt = args.pop()
+        auto_unload = args.pop()
         new_all_prompts = []
         for prompt, sub_seed in zip(p.all_prompts, p.all_seeds):
             # Following the image seed keeps each batch item's prompt tied to the
             # image it produces (issue #14).
             tipo_seed = int(sub_seed) if follow_generation_seed else seed + sub_seed
             new_all_prompts.append(
-                self._process(prompt, nl_prompt, aspect_ratio, tipo_seed, *args)
+                self._process(prompt, nl_prompt, aspect_ratio, tipo_seed, *args, auto_unload, tag_prompt)
             )
 
         hr_fix_enabled = getattr(p, "enable_hr", False)
@@ -747,7 +757,10 @@ class TIPOScript(scripts.Script):
         seed = int(p.seed) if follow_generation_seed else int(seed + p.seed)
 
         args = list(args)
-        p.prompt = self._process(p.prompt, args.pop(), aspect_ratio, seed, *args)
+        nl_prompt = args.pop()
+        tag_prompt = args.pop()
+        auto_unload = args.pop()
+        p.prompt = self._process(p.prompt, nl_prompt, aspect_ratio, seed, *args, auto_unload, tag_prompt)
 
     def prompt_gen_only(self, *args):
         args = list(args)
@@ -755,7 +768,10 @@ class TIPOScript(scripts.Script):
         if seed == -1:
             seed = random.randrange(2**31 - 1)
             args[3] = seed
-        return self._process(*args)
+        nl_prompt = args.pop()
+        tag_prompt = args.pop()
+        auto_unload = args.pop()
+        return self._process(*args, auto_unload, tag_prompt)
 
     def _process(
         self,
@@ -774,6 +790,7 @@ class TIPOScript(scripts.Script):
         model: str,
         gguf_use_cpu: bool,
         no_formatting: bool,
+        auto_unload: bool,
         tag_prompt: str,
     ):
         prompt = prompt.strip() or tag_prompt
@@ -859,9 +876,18 @@ class TIPOScript(scripts.Script):
             top_k=top_k,
             seed=seed,
         )
-        if isinstance(models.text_model, torch.nn.Module):
-            models.text_model.cpu()
-            devices.torch_gc()
+        if auto_unload:
+            if isinstance(models.text_model, torch.nn.Module):
+                models.text_model.cpu()
+                devices.torch_gc()
+            try:
+                if hasattr(models.text_model, "free"):
+                    models.text_model.free()
+            except Exception:
+                pass
+            models.text_model = None
+            self.current_model = None
+            logger.info("Model unloaded from VRAM")
 
         tag_map = restore_embeddings(tag_map, embeddings)
         addon = {
