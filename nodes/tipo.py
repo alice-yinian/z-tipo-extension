@@ -433,9 +433,10 @@ def common_inputs(fifth):
         # out of its stored slot in existing workflows.
         io.Int.Input("seed", default=1234),
         io.Combo.Input("device", options=devices, default=devices[0]),
-        io.Bool.Input(
+        io.Combo.Input(
             "auto_unload",
-            default=False,
+            options=["false", "true"],
+            default="false",
             tooltip="Unload the model from VRAM after execution to free GPU memory.",
         ),
     ]
@@ -487,8 +488,9 @@ class TIPO(io.ComfyNode):
         seed: int,
         device: str,
         format: str,
-        auto_unload: bool,
+        auto_unload: str,
     ) -> io.NodeOutput:
+        auto_unload = auto_unload.lower() == "true"
         ensure_runtime()
         load_model(tipo_model, device)
 
@@ -609,9 +611,10 @@ class TIPOOperation(io.ComfyNode):
         nl_length: str,
         seed: int,
         device: str,
-        auto_unload: bool,
-        operation: str,
+        auto_unload: str,
+        format: str,
     ) -> io.NodeOutput:
+        auto_unload = auto_unload.lower() == "true"
         ensure_runtime()
         load_model(tipo_model, device)
 
